@@ -62,7 +62,23 @@ export const storage = {
     }
     const { data, error } = await sb.from("kv_store").select("value").eq("key", key).maybeSingle();
     if (error) throw error;
-    return data ? { key, value: data.value, shared } : null;
+    if (data) return { key, value: data.value, shared };
+
+    // Migração automática: se o Supabase não tem esse registro, pode ser que ele
+    // tenha sido criado ANTES do banco estar configurado (ficou só no localStorage
+    // deste navegador). Em vez de tratar como "não existe" e voltar pro login, a
+    // gente recupera esse valor local e sobe pro Supabase agora, uma única vez.
+    const legacyValue = lsGet("shared:" + key);
+    if (legacyValue === null) return null;
+    try {
+      const { error: upsertError } = await sb
+        .from("kv_store")
+        .upsert({ key, value: legacyValue, updated_at: new Date().toISOString() });
+      if (!upsertError) lsDelete("shared:" + key);
+    } catch (e) {
+      console.error("Erro ao migrar dados locais para o Supabase:", e);
+    }
+    return { key, value: legacyValue, shared };
   },
 
   async set(key, value, shared = false) {
